@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Link, NavLink } from 'react-router';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { CartProvider, useCart } from './context/CartContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import RoleRoute from './components/RoleRoute';
 
@@ -9,7 +10,9 @@ import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import ShopPage from './pages/ShopPage';
 import CartPage from './pages/CartPage';
+import CheckoutPage from './pages/CheckoutPage';
 import OrdersPage from './pages/OrdersPage';
+import OrderDetailPage from './pages/OrderDetailPage';
 import StaffPage from './pages/StaffPage';
 import ManagerPage from './pages/ManagerPage';
 import AdminPage from './pages/AdminPage';
@@ -17,6 +20,7 @@ import NotFoundPage from './pages/NotFoundPage';
 
 function Navigation() {
   const { user, isAuthenticated, logout } = useAuth();
+  const { cart } = useCart();
 
   const navLinkClasses = ({ isActive }) =>
     `px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
@@ -49,11 +53,18 @@ function Navigation() {
         <nav className="hidden md:flex items-center gap-2">
           <NavLink to="/" end className={navLinkClasses}>Home</NavLink>
           <NavLink to="/shop" className={navLinkClasses}>Shop</NavLink>
+          <NavLink to="/cart" className={navLinkClasses}>
+            <span className="flex items-center gap-1.5">
+              Cart
+              {cart?.itemCount > 0 && (
+                <span className="px-1.5 py-0.2 bg-accent text-white text-[10px] font-bold rounded-full">
+                  {cart.itemCount}
+                </span>
+              )}
+            </span>
+          </NavLink>
           {isAuthenticated && (
-            <>
-              <NavLink to="/cart" className={navLinkClasses}>Cart</NavLink>
-              <NavLink to="/orders" className={navLinkClasses}>Orders</NavLink>
-            </>
+            <NavLink to="/orders" className={navLinkClasses}>Orders</NavLink>
           )}
           {isAuthenticated && ['store_staff', 'store_manager', 'admin'].includes(user?.role) && (
             <NavLink to="/staff" className={navLinkClasses}>Staff</NavLink>
@@ -72,7 +83,7 @@ function Navigation() {
               <div className="text-right hidden sm:block">
                 <div className="text-sm font-semibold text-text">{user?.name}</div>
                 <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${getRoleBadge(user?.role)}`}>
-                  {user?.role?.replace('_', ' ')}
+                  {user?.role?.replace(/_/g, ' ')}
                 </span>
               </div>
               <button
@@ -107,70 +118,81 @@ function Navigation() {
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <div className="min-h-screen flex flex-col bg-bg text-text">
-          <Navigation />
-          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <Routes>
-              {/* Public Routes */}
-              <Route path="/" element={<HomePage />} />
-              <Route path="/shop" element={<ShopPage />} />
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/register" element={<RegisterPage />} />
+      <CartProvider>
+        <BrowserRouter>
+          <div className="min-h-screen flex flex-col bg-bg text-text">
+            <Navigation />
+            <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+              <Routes>
+                {/* Public / Shop Routes */}
+                <Route path="/" element={<HomePage />} />
+                <Route path="/shop" element={<ShopPage />} />
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/register" element={<RegisterPage />} />
+                <Route path="/cart" element={<CartPage />} />
 
-              {/* Authenticated Customer Routes */}
-              <Route
-                path="/cart"
-                element={
-                  <ProtectedRoute>
-                    <CartPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/orders"
-                element={
-                  <ProtectedRoute>
-                    <OrdersPage />
-                  </ProtectedRoute>
-                }
-              />
+                {/* Authenticated Customer Routes */}
+                <Route
+                  path="/checkout"
+                  element={
+                    <ProtectedRoute>
+                      <CheckoutPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/orders"
+                  element={
+                    <ProtectedRoute>
+                      <OrdersPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/orders/:id"
+                  element={
+                    <ProtectedRoute>
+                      <OrderDetailPage />
+                    </ProtectedRoute>
+                  }
+                />
 
-              {/* Role Restricted Routes */}
-              <Route
-                path="/staff"
-                element={
-                  <RoleRoute allowedRoles={['store_staff', 'store_manager', 'admin']}>
-                    <StaffPage />
-                  </RoleRoute>
-                }
-              />
-              <Route
-                path="/manager"
-                element={
-                  <RoleRoute allowedRoles={['store_manager', 'admin']}>
-                    <ManagerPage />
-                  </RoleRoute>
-                }
-              />
-              <Route
-                path="/admin"
-                element={
-                  <RoleRoute allowedRoles={['admin']}>
-                    <AdminPage />
-                  </RoleRoute>
-                }
-              />
+                {/* Role Restricted Routes */}
+                <Route
+                  path="/staff"
+                  element={
+                    <RoleRoute allowedRoles={['store_staff', 'store_manager', 'admin']}>
+                      <StaffPage />
+                    </RoleRoute>
+                  }
+                />
+                <Route
+                  path="/manager"
+                  element={
+                    <RoleRoute allowedRoles={['store_manager', 'admin']}>
+                      <ManagerPage />
+                    </RoleRoute>
+                  }
+                />
+                <Route
+                  path="/admin"
+                  element={
+                    <RoleRoute allowedRoles={['admin']}>
+                      <AdminPage />
+                    </RoleRoute>
+                  }
+                />
 
-              {/* Fallback */}
-              <Route path="*" element={<NotFoundPage />} />
-            </Routes>
-          </main>
-          <footer className="bg-white border-t border-border py-4 text-center text-xs text-gray-500">
-            Mini D-Mart MERN Monorepo &copy; {new Date().getFullYear()}
-          </footer>
-        </div>
-      </BrowserRouter>
+                {/* Fallback */}
+                <Route path="*" element={<NotFoundPage />} />
+              </Routes>
+            </main>
+            <footer className="bg-white border-t border-border py-4 text-center text-xs text-gray-500">
+              Mini D-Mart MERN Monorepo &copy; {new Date().getFullYear()}
+            </footer>
+          </div>
+        </BrowserRouter>
+      </CartProvider>
     </AuthProvider>
   );
 }

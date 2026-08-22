@@ -72,18 +72,17 @@ const orderSchema = new mongoose.Schema(
       type: String,
       enum: {
         values: [
-          'pending',
+          'placed',
           'confirmed',
-          'processing',
+          'preparing',
           'ready_for_pickup',
           'out_for_delivery',
           'completed',
           'cancelled',
-          'returned',
         ],
         message: '{VALUE} is not a valid order status',
       },
-      default: 'pending',
+      default: 'placed',
       required: true,
       index: true,
     },
@@ -120,7 +119,7 @@ const orderSchema = new mongoose.Schema(
   }
 );
 
-// Sensible compound indexes
+// Compound indexes
 orderSchema.index({ userId: 1, status: 1 });
 orderSchema.index({ storeId: 1, status: 1 });
 orderSchema.index({ createdAt: -1 });
