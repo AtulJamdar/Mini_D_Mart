@@ -46,6 +46,14 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+    assignedStoreId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Store',
+    },
     addresses: [addressSchema],
   },
   {

@@ -6,12 +6,14 @@ import ReturnRequest from '../models/ReturnRequest.js';
 import { sendSuccess, sendError } from '../utils/responseHelper.js';
 
 /**
- * Get all active stores
+ * Get all active stores (or all stores if includeInactive is passed)
  * GET /api/stores
  */
 export const getStores = async (req, res) => {
   try {
-    const stores = await Store.find({ isActive: true });
+    const filter = req.query.all === 'true' ? {} : { isActive: true };
+    const stores = await Store.find(filter).sort({ name: 1 });
+
     return sendSuccess(res, {
       statusCode: 200,
       data: stores,
@@ -22,6 +24,80 @@ export const getStores = async (req, res) => {
       statusCode: 500,
       message: 'Failed to retrieve stores',
       error: error.message,
+    });
+  }
+};
+
+/**
+ * Create a new Store branch (Admin)
+ * POST /api/stores
+ */
+export const createStore = async (req, res) => {
+  try {
+    const { name, address, geo } = req.body;
+    if (!name || !address?.street || !address?.city) {
+      return sendError(res, {
+        statusCode: 400,
+        message: 'Store name, street, and city are required.',
+      });
+    }
+
+    const store = await Store.create({
+      name,
+      address: {
+        street: address.street.trim(),
+        city: address.city.trim(),
+        state: address.state?.trim() || 'Maharashtra',
+        pincode: address.pincode?.trim() || '400001',
+      },
+      geo: {
+        type: 'Point',
+        coordinates: geo?.coordinates || [72.8777, 19.076],
+      },
+      isActive: true,
+    });
+
+    return sendSuccess(res, {
+      statusCode: 201,
+      data: store,
+      message: `Store "${store.name}" created successfully.`,
+    });
+  } catch (error) {
+    return sendError(res, {
+      statusCode: 400,
+      message: error.message || 'Failed to create store',
+    });
+  }
+};
+
+/**
+ * Update store branch details or active status (Admin)
+ * PATCH /api/stores/:id
+ */
+export const updateStore = async (req, res) => {
+  try {
+    const { name, address, isActive, geo } = req.body;
+    const updates = {};
+
+    if (name) updates.name = name.trim();
+    if (address) updates.address = address;
+    if (typeof isActive === 'boolean') updates.isActive = isActive;
+    if (geo) updates.geo = geo;
+
+    const store = await Store.findByIdAndUpdate(req.params.id, updates, { new: true });
+    if (!store) {
+      return sendError(res, { statusCode: 404, message: 'Store not found' });
+    }
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      data: store,
+      message: 'Store updated successfully.',
+    });
+  } catch (error) {
+    return sendError(res, {
+      statusCode: 400,
+      message: error.message || 'Failed to update store',
     });
   }
 };
@@ -61,41 +137,24 @@ export const getStoreSlots = async (req, res) => {
 };
 
 /**
- * Get store KPI analytics (Revenue, Active Orders, Low Stock Alerts, Pending Returns)
+ * Get store KPI analytics
  * GET /api/stores/:storeId/analytics
  */
 export const getStoreAnalytics = async (req, res) => {
   try {
     const { storeId } = req.params;
-
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
 
     const [todayOrders, activeOrdersCount, lowStockProducts, pendingReturns] = await Promise.all([
-      // 1. Today's orders
-      Order.find({
-        storeId,
-        createdAt: { $gte: startOfToday },
-        status: { $ne: 'cancelled' },
-      }),
-      // 2. Currently active in-flight orders
-      Order.countDocuments({
-        storeId,
-        status: { $in: ['placed', 'confirmed', 'preparing', 'ready_for_pickup', 'out_for_delivery'] },
-      }),
-      // 3. Low stock items (stock <= 10)
-      Product.find({
-        storeId,
-        stock: { $lte: 10 },
-      }).select('name stock unit price categoryId'),
-      // 4. Pending return requests for this store
+      Order.find({ storeId, createdAt: { $gte: startOfToday }, status: { $ne: 'cancelled' } }),
+      Order.countDocuments({ storeId, status: { $in: ['placed', 'confirmed', 'preparing', 'ready_for_pickup', 'out_for_delivery'] } }),
+      Product.find({ storeId, stock: { $lte: 10 } }).select('name stock unit price categoryId'),
       ReturnRequest.find({ status: 'requested' }).populate('orderId', 'storeId'),
     ]);
 
     const todaySales = todayOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
-    const storePendingReturns = pendingReturns.filter(
-      (r) => r.orderId && r.orderId.storeId?.toString() === storeId.toString()
-    );
+    const storePendingReturns = pendingReturns.filter((r) => r.orderId && r.orderId.storeId?.toString() === storeId.toString());
 
     return sendSuccess(res, {
       statusCode: 200,

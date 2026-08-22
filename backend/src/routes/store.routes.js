@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import {
   getStores,
+  createStore,
+  updateStore,
   getStoreSlots,
   getStoreAnalytics,
 } from '../controllers/store.controller.js';
@@ -11,6 +13,9 @@ const storeRouter = Router();
 
 storeRouter.get('/', getStores);
 storeRouter.get('/:storeId/slots', getStoreSlots);
+
+storeRouter.post('/', authenticate, requireRole('admin'), createStore);
+storeRouter.patch('/:id', authenticate, requireRole('admin'), updateStore);
 
 storeRouter.get(
   '/:storeId/analytics',
