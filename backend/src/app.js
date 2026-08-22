@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import cookieParser from 'cookie-parser';
 import mongoSanitize from 'express-mongo-sanitize';
 import rateLimit from 'express-rate-limit';
 import apiRouter from './routes/index.js';
@@ -20,23 +21,28 @@ app.use(
   })
 );
 
+// Cookie Parser
+app.use(cookieParser());
+
 // Request logging in development
 if (process.env.NODE_ENV !== 'production') {
   app.use(morgan('dev'));
 }
 
-// Rate Limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+// Global General Rate Limiting
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
     success: false,
-    message: 'Too many requests from this IP, please try again after 15 minutes',
+    data: null,
+    error: 'Too many requests from this IP, please try again after 15 minutes',
+    message: 'Too many requests',
   },
 });
-app.use('/api', limiter);
+app.use('/api', generalLimiter);
 
 // Body Parsers
 app.use(express.json({ limit: '10kb' }));
@@ -51,9 +57,14 @@ app.use('/api', apiRouter);
 // Root fallback route
 app.get('/', (req, res) => {
   res.json({
-    name: 'Mini D-Mart API Server',
-    version: '1.0.0',
-    status: 'online',
+    success: true,
+    data: {
+      name: 'Mini D-Mart API Server',
+      version: '1.0.0',
+      status: 'online',
+    },
+    error: null,
+    message: 'Mini D-Mart API root',
   });
 });
 
