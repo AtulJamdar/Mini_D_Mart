@@ -27,6 +27,7 @@ const getCookieOptions = () => {
     secure: isProduction,
     sameSite: isProduction ? 'strict' : 'lax',
     maxAge: 60 * 60 * 1000, // 1 hour in ms
+    path: '/',
   };
 };
 
@@ -38,7 +39,6 @@ export const register = async (req, res) => {
   try {
     const { name, email, password, phone, role } = req.body;
 
-    // Check if user already exists
     const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
     if (existingUser) {
       return sendError(res, {
@@ -47,21 +47,18 @@ export const register = async (req, res) => {
       });
     }
 
-    // Hash password with 12 rounds
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
-    // Create user
     const newUser = await User.create({
-      name,
+      name: name.trim(),
       email: email.toLowerCase().trim(),
       passwordHash,
-      phone,
+      phone: phone?.trim(),
       role: role || 'customer',
+      isActive: true,
     });
 
     const token = signToken(newUser._id, newUser.role);
-
-    // Set httpOnly cookie
     res.cookie('token', token, getCookieOptions());
 
     const userObj = {
@@ -77,7 +74,7 @@ export const register = async (req, res) => {
       statusCode: 201,
       message: 'Registration successful.',
       data: {
-        token,
+        token, // Included for API testing tools
         user: userObj,
       },
     });
@@ -93,6 +90,7 @@ export const register = async (req, res) => {
 /**
  * Log in an existing user
  * POST /api/auth/login
+ * Prevents account enumeration by returning identical generic error messages.
  */
 export const login = async (req, res) => {
   const { email, password } = req.body;
@@ -101,15 +99,15 @@ export const login = async (req, res) => {
   try {
     const user = await User.findOne({ email: normalizedEmail });
 
-    if (!user) {
-      // Audit log failed attempt
+    if (!user || !user.isActive) {
       await AuditLoggerService.logLoginAttempt({
         email: normalizedEmail,
         success: false,
         req,
-        reason: 'User email not found',
+        reason: !user ? 'User email not found' : 'User account deactivated',
       });
 
+      // Generic message to prevent user enumeration
       return sendError(res, {
         statusCode: 401,
         message: 'Invalid email or password.',
@@ -119,7 +117,6 @@ export const login = async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.passwordHash);
 
     if (!isMatch) {
-      // Audit log failed attempt
       await AuditLoggerService.logLoginAttempt({
         email: normalizedEmail,
         userId: user._id,
@@ -128,13 +125,13 @@ export const login = async (req, res) => {
         reason: 'Incorrect password',
       });
 
+      // Generic message to prevent user enumeration
       return sendError(res, {
         statusCode: 401,
         message: 'Invalid email or password.',
       });
     }
 
-    // Audit log successful attempt
     await AuditLoggerService.logLoginAttempt({
       email: normalizedEmail,
       userId: user._id,
@@ -144,8 +141,6 @@ export const login = async (req, res) => {
     });
 
     const token = signToken(user._id, user.role);
-
-    // Set httpOnly cookie
     res.cookie('token', token, getCookieOptions());
 
     const userObj = {
@@ -154,6 +149,7 @@ export const login = async (req, res) => {
       email: user.email,
       role: user.role,
       phone: user.phone,
+      assignedStoreId: user.assignedStoreId,
       addresses: user.addresses,
       createdAt: user.createdAt,
     };
@@ -162,7 +158,7 @@ export const login = async (req, res) => {
       statusCode: 200,
       message: 'Login successful.',
       data: {
-        token,
+        token, // Included for API testing tools
         user: userObj,
       },
     });

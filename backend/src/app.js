@@ -13,15 +13,18 @@ const app = express();
 // Security HTTP headers
 app.use(helmet());
 
-// Cross-Origin Resource Sharing
+// Cross-Origin Resource Sharing strictly locked to CLIENT_URL
+const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: clientUrl,
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
 
-// Cookie Parser
+// Cookie Parser for httpOnly JWT authentication
 app.use(cookieParser());
 
 // Request logging in development
@@ -29,7 +32,7 @@ if (process.env.NODE_ENV !== 'production') {
   app.use(morgan('dev'));
 }
 
-// Global General Rate Limiting
+// Global API Rate Limiter (200 requests per 15 minutes)
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 200,
@@ -44,7 +47,7 @@ const generalLimiter = rateLimit({
 });
 app.use('/api', generalLimiter);
 
-// Body Parsers
+// Body Parsers with payload size limits to mitigate DoS
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 

@@ -5,11 +5,10 @@ const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(() => localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Check current session on mount or token change
+  // Check current session via httpOnly cookie on mount
   useEffect(() => {
     const fetchCurrentUser = async () => {
       try {
@@ -19,8 +18,6 @@ export const AuthProvider = ({ children }) => {
         }
       } catch (err) {
         setUser(null);
-        setToken(null);
-        localStorage.removeItem('token');
       } finally {
         setLoading(false);
       }
@@ -33,18 +30,13 @@ export const AuthProvider = ({ children }) => {
     setError(null);
     try {
       const response = await api.post('/auth/login', { email, password });
-      const { token: receivedToken, user: receivedUser } = response.data.data;
-
-      if (receivedToken) {
-        localStorage.setItem('token', receivedToken);
-        setToken(receivedToken);
-      }
+      const { user: receivedUser } = response.data.data;
       setUser(receivedUser);
       return { success: true, user: receivedUser };
     } catch (err) {
       const errMsg =
-        err.response?.data?.error ||
         err.response?.data?.message ||
+        err.response?.data?.error ||
         'Login failed. Please check your credentials.';
       setError(errMsg);
       return { success: false, error: errMsg };
@@ -55,18 +47,13 @@ export const AuthProvider = ({ children }) => {
     setError(null);
     try {
       const response = await api.post('/auth/register', userData);
-      const { token: receivedToken, user: receivedUser } = response.data.data;
-
-      if (receivedToken) {
-        localStorage.setItem('token', receivedToken);
-        setToken(receivedToken);
-      }
+      const { user: receivedUser } = response.data.data;
       setUser(receivedUser);
       return { success: true, user: receivedUser };
     } catch (err) {
       const errMsg =
-        err.response?.data?.error ||
         err.response?.data?.message ||
+        err.response?.data?.error ||
         'Registration failed. Please try again.';
       setError(errMsg);
       return { success: false, error: errMsg };
@@ -77,10 +64,8 @@ export const AuthProvider = ({ children }) => {
     try {
       await api.post('/auth/logout');
     } catch (err) {
-      console.warn('Logout request failed:', err.message);
+      console.warn('Logout request error:', err.message);
     } finally {
-      localStorage.removeItem('token');
-      setToken(null);
       setUser(null);
     }
   };
@@ -89,7 +74,6 @@ export const AuthProvider = ({ children }) => {
 
   const value = {
     user,
-    token,
     loading,
     error,
     login,
