@@ -4,6 +4,7 @@ import cartRouter from './cart.routes.js';
 import orderRouter from './order.routes.js';
 import storeRouter from './store.routes.js';
 import productRouter from './product.routes.js';
+import returnRouter from './return.routes.js';
 
 const apiRouter = Router();
 
@@ -13,6 +14,7 @@ apiRouter.use('/cart', cartRouter);
 apiRouter.use('/orders', orderRouter);
 apiRouter.use('/stores', storeRouter);
 apiRouter.use('/products', productRouter);
+apiRouter.use('/returns', returnRouter);
 
 // Health check route
 apiRouter.get('/health', (req, res) => {
