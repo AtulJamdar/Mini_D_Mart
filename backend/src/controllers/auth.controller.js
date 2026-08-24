@@ -1,94 +1,17 @@
 import bcrypt from 'bcryptjs';
-import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import AuditLoggerService from '../services/auditLogger.service.js';
 import { sendSuccess, sendError } from '../utils/responseHelper.js';
+import {
+  signToken,
+  getCookieOptions,
+  formatUserResponse,
+} from '../utils/authHelper.js';
 
-const BCRYPT_ROUNDS = 12;
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
-const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_key_mini_dmart_change_in_production';
-
-/**
- * Generate JWT access token
- */
-const signToken = (id, role) => {
-  return jwt.sign({ id, role }, JWT_SECRET, {
-    expiresIn: JWT_EXPIRES_IN,
-  });
-};
+export { requestOtp, verifyOtp } from './otpAuth.controller.js';
 
 /**
- * Configure cookie options for JWT
- */
-const getCookieOptions = () => {
-  const isProduction = process.env.NODE_ENV === 'production';
-  return {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'strict' : 'lax',
-    maxAge: 60 * 60 * 1000, // 1 hour in ms
-    path: '/',
-  };
-};
-
-/**
- * Register a new user
- * POST /api/auth/register
- */
-export const register = async (req, res) => {
-  try {
-    const { name, email, password, phone, role } = req.body;
-
-    const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
-    if (existingUser) {
-      return sendError(res, {
-        statusCode: 409,
-        message: 'An account with this email address already exists.',
-      });
-    }
-
-    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-
-    const newUser = await User.create({
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
-      passwordHash,
-      phone: phone?.trim(),
-      role: role || 'customer',
-      isActive: true,
-    });
-
-    const token = signToken(newUser._id, newUser.role);
-    res.cookie('token', token, getCookieOptions());
-
-    const userObj = {
-      _id: newUser._id,
-      name: newUser.name,
-      email: newUser.email,
-      role: newUser.role,
-      phone: newUser.phone,
-      createdAt: newUser.createdAt,
-    };
-
-    return sendSuccess(res, {
-      statusCode: 201,
-      message: 'Registration successful.',
-      data: {
-        token, // Included for API testing tools
-        user: userObj,
-      },
-    });
-  } catch (error) {
-    return sendError(res, {
-      statusCode: 500,
-      message: 'Registration failed.',
-      error: error.message,
-    });
-  }
-};
-
-/**
- * Log in an existing user
+ * Log in an existing user (Staff, Manager, Admin)
  * POST /api/auth/login
  * Prevents account enumeration by returning identical generic error messages.
  */
@@ -143,23 +66,12 @@ export const login = async (req, res) => {
     const token = signToken(user._id, user.role);
     res.cookie('token', token, getCookieOptions());
 
-    const userObj = {
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      phone: user.phone,
-      assignedStoreId: user.assignedStoreId,
-      addresses: user.addresses,
-      createdAt: user.createdAt,
-    };
-
     return sendSuccess(res, {
       statusCode: 200,
       message: 'Login successful.',
       data: {
         token, // Included for API testing tools
-        user: userObj,
+        user: formatUserResponse(user),
       },
     });
   } catch (error) {
@@ -183,6 +95,115 @@ export const getMe = async (req, res) => {
       user: req.user,
     },
   });
+};
+
+/**
+ * Update authenticated user's profile
+ * PATCH /api/auth/profile
+ */
+export const updateProfile = async (req, res) => {
+  const { name, firstName, lastName, email } = req.body;
+  const user = req.user;
+
+  try {
+    if (firstName || lastName) {
+      const parts = [firstName, lastName].filter(Boolean);
+      user.name = parts.join(' ').trim();
+    } else if (name) {
+      user.name = name.trim();
+    }
+
+    if (email !== undefined) {
+      user.email = email ? email.toLowerCase().trim() : undefined;
+    }
+
+    await user.save();
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: 'Profile updated successfully.',
+      data: {
+        user: formatUserResponse(user),
+      },
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return sendError(res, {
+        statusCode: 409,
+        message: 'This email address is already in use by another account.',
+      });
+    }
+    return sendError(res, {
+      statusCode: 500,
+      message: 'Failed to update profile.',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * Update authenticated user's lightweight preferred delivery location
+ * PATCH /api/auth/location
+ */
+export const updatePreferredLocation = async (req, res) => {
+  const { label, pincode, city, lat, lng } = req.body;
+  const user = req.user;
+
+  try {
+    user.preferredLocation = {
+      label: label ? label.trim() : user.preferredLocation?.label || '',
+      pincode: pincode ? pincode.toString().trim() : user.preferredLocation?.pincode || '',
+      city: city ? city.trim() : user.preferredLocation?.city || '',
+      lat: typeof lat === 'number' ? lat : user.preferredLocation?.lat,
+      lng: typeof lng === 'number' ? lng : user.preferredLocation?.lng,
+    };
+
+    await user.save();
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: 'Preferred delivery location updated successfully.',
+      data: {
+        preferredLocation: user.preferredLocation,
+        user: formatUserResponse(user),
+      },
+    });
+  } catch (error) {
+    return sendError(res, {
+      statusCode: 500,
+      message: 'Failed to update preferred location.',
+      error: error.message,
+    });
+  }
+};
+
+export { addAddress, deleteAddress } from './address.controller.js';
+
+/**
+ * Delete / Deactivate current user account
+ * DELETE /api/auth/account
+ */
+export const deleteAccount = async (req, res) => {
+  const user = req.user;
+
+  try {
+    user.isActive = false;
+    await user.save();
+
+    res.clearCookie('token', getCookieOptions());
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: 'Your account has been deleted / deactivated.',
+      data: null,
+    });
+  } catch (error) {
+    return sendError(res, {
+      statusCode: 500,
+      message: 'Failed to delete account.',
+      error: error.message,
+    });
+  }
 };
 
 /**

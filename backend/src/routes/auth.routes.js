@@ -1,16 +1,28 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { body, validationResult } from 'express-validator';
-import { register, login, getMe, logout } from '../controllers/auth.controller.js';
+import {
+  login,
+  getMe,
+  logout,
+  requestOtp,
+  verifyOtp,
+  updateProfile,
+  updatePreferredLocation,
+  addAddress,
+  deleteAddress,
+  deleteAccount,
+} from '../controllers/auth.controller.js';
 import { authenticate } from '../middlewares/auth.js';
 import { sendError } from '../utils/responseHelper.js';
 
 const authRouter = Router();
 
-// Dedicated rate limiter for authentication endpoints: max 20 requests per 15 minutes
+// Dedicated rate limiter for authentication endpoints: max 20 requests per 15 minutes (skipped in test)
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
+  skip: () => process.env.NODE_ENV === 'test',
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -35,31 +47,51 @@ const validate = (req, res, next) => {
 };
 
 // Validation rules
-const registerValidation = [
-  body('name').trim().notEmpty().withMessage('Name is required'),
-  body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email address'),
-  body('password')
-    .isLength({ min: 6 })
-    .withMessage('Password must be at least 6 characters long'),
-  body('role')
-    .optional()
-    .isIn(['customer', 'store_staff', 'store_manager', 'admin'])
-    .withMessage('Invalid role specified'),
-  validate,
-];
-
 const loginValidation = [
   body('email').isEmail().normalizeEmail().withMessage('Please provide a valid email address'),
   body('password').notEmpty().withMessage('Password is required'),
   validate,
 ];
 
+const otpRequestValidation = [
+  body('phone')
+    .trim()
+    .notEmpty()
+    .withMessage('Phone number is required')
+    .custom((val) => {
+      const clean = val.toString().replace(/\D/g, '').slice(-10);
+      if (clean.length !== 10) {
+        throw new Error('Please provide a valid 10-digit phone number');
+      }
+      return true;
+    }),
+  validate,
+];
+
+const otpVerifyValidation = [
+  body('phone')
+    .trim()
+    .notEmpty()
+    .withMessage('Phone number is required'),
+  body('otp')
+    .trim()
+    .notEmpty()
+    .withMessage('OTP is required'),
+  validate,
+];
+
 // Mount Routes with rate limiting
 authRouter.use(authLimiter);
 
-authRouter.post('/register', registerValidation, register);
 authRouter.post('/login', loginValidation, login);
+authRouter.post('/otp/request', otpRequestValidation, requestOtp);
+authRouter.post('/otp/verify', otpVerifyValidation, verifyOtp);
 authRouter.get('/me', authenticate, getMe);
+authRouter.patch('/profile', authenticate, updateProfile);
+authRouter.patch('/location', authenticate, updatePreferredLocation);
+authRouter.post('/addresses', authenticate, addAddress);
+authRouter.delete('/addresses/:id', authenticate, deleteAddress);
+authRouter.delete('/account', authenticate, deleteAccount);
 authRouter.post('/logout', authenticate, logout);
 
 export default authRouter;

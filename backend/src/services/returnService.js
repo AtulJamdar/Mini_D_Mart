@@ -2,8 +2,101 @@ import ReturnRequest from '../models/ReturnRequest.js';
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
 import AuditLoggerService from './auditLogger.service.js';
+import razorpayService from './razorpayService.js';
 
 class ReturnService {
+  /**
+   * Issue Razorpay refund for an approved Return request (Store Manager / Admin)
+   * Enforces atomic idempotency to strictly prevent duplicate refunds.
+   */
+  static async refundReturnRequest(requestId, managerId) {
+    // 1. Atomic status transition from 'approved' to 'refunding' prevents duplicate concurrent / subsequent refunds
+    const request = await ReturnRequest.findOneAndUpdate(
+      { _id: requestId, status: 'approved', type: 'return' },
+      { $set: { status: 'refunding' } },
+      { returnDocument: 'after' }
+    )
+      .populate('orderId')
+      .populate('itemId');
+
+    if (!request) {
+      const existing = await ReturnRequest.findById(requestId);
+      if (!existing) {
+        throw new Error('Return request not found.');
+      }
+      if (existing.status === 'completed') {
+        throw new Error('This return request has already been refunded. Duplicate refund prevented.');
+      }
+      if (existing.status === 'refunding') {
+        throw new Error('This return request is currently being processed for refund.');
+      }
+      if (existing.status !== 'approved') {
+        throw new Error(`Cannot refund a return request in "${existing.status}" status. It must be "approved" first.`);
+      }
+      if (existing.type !== 'return') {
+        throw new Error('Only return requests (not exchanges) are eligible for monetary refunds.');
+      }
+      throw new Error('Return request could not be processed for refund.');
+    }
+
+    const order = request.orderId;
+    const paymentId = order?.paymentDetails?.razorpayPaymentId;
+
+    if (!paymentId) {
+      // Rollback status
+      await ReturnRequest.findByIdAndUpdate(requestId, { status: 'approved' });
+      throw new Error('No Razorpay payment ID found on the order to issue automated refund.');
+    }
+
+    const product = request.itemId;
+    const orderItem = order?.items?.find(
+      (i) => i.productId.toString() === product._id.toString()
+    );
+    const itemAmount = orderItem ? orderItem.priceAtOrder * orderItem.qty : product.price;
+    const amountPaise = Math.round(itemAmount * 100);
+
+    let refund;
+    try {
+      refund = await razorpayService.issueRefund({
+        paymentId,
+        amount: amountPaise,
+        notes: {
+          returnRequestId: request._id.toString(),
+          orderId: order._id.toString(),
+          productId: product._id.toString(),
+        },
+      });
+    } catch (refundErr) {
+      // Rollback status on failure so it can be retried safely
+      await ReturnRequest.findByIdAndUpdate(requestId, { status: 'approved' });
+      throw refundErr;
+    }
+
+    request.status = 'completed';
+    request.resolvedAt = new Date();
+    request.resolvedBy = managerId;
+    await request.save();
+
+    await AuditLoggerService.logEvent({
+      userId: managerId,
+      action: 'REFUND_ISSUED',
+      resource: 'RETURN_REQUEST',
+      resourceId: request._id,
+      metadata: {
+        orderId: order._id,
+        paymentId,
+        refundId: refund.id,
+        amount: amountPaise,
+        refundedBy: managerId,
+      },
+    });
+
+    return {
+      request,
+      refund,
+    };
+  }
+
   /**
    * Approve a Return or Exchange request (Store Manager / Admin)
    */
@@ -159,6 +252,12 @@ class ReturnService {
     const filter = {};
     if (status) {
       filter.status = status;
+    }
+
+    if (storeId) {
+      const storeOrders = await Order.find({ storeId }).select('_id');
+      const orderIds = storeOrders.map((o) => o._id);
+      filter.orderId = { $in: orderIds };
     }
 
     return ReturnRequest.find(filter)

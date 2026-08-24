@@ -5,6 +5,7 @@ import {
   getReturns,
   approveReturn,
   rejectReturn,
+  refundReturn,
 } from '../controllers/return.controller.js';
 import { authenticate } from '../middlewares/auth.js';
 import { requireRole } from '../middlewares/rbac.js';
@@ -28,6 +29,12 @@ returnRouter.patch(
   '/:id/reject',
   requireRole('store_manager', 'admin'),
   rejectReturn
+);
+
+returnRouter.post(
+  '/:id/refund',
+  requireRole('store_manager', 'admin'),
+  refundReturn
 );
 
 export default returnRouter;

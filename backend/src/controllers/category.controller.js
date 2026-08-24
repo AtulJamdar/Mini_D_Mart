@@ -1,4 +1,6 @@
 import Category from '../models/Category.js';
+import Product from '../models/Product.js';
+import AuditLoggerService from '../services/auditLogger.service.js';
 import { sendSuccess, sendError } from '../utils/responseHelper.js';
 
 /**
@@ -45,6 +47,14 @@ export const createCategory = async (req, res) => {
       isActive: true,
     });
 
+    await AuditLoggerService.logEvent({
+      userId: req.user?._id,
+      action: 'ADMIN_CREATE_CATEGORY',
+      resource: 'CATEGORY',
+      resourceId: category._id,
+      metadata: { name: category.name },
+    });
+
     return sendSuccess(res, {
       statusCode: 201,
       data: category,
@@ -77,6 +87,14 @@ export const updateCategory = async (req, res) => {
       return sendError(res, { statusCode: 404, message: 'Category not found' });
     }
 
+    await AuditLoggerService.logEvent({
+      userId: req.user?._id,
+      action: 'ADMIN_UPDATE_CATEGORY',
+      resource: 'CATEGORY',
+      resourceId: category._id,
+      metadata: { updates, name: category.name },
+    });
+
     return sendSuccess(res, {
       statusCode: 200,
       data: category,
@@ -86,6 +104,48 @@ export const updateCategory = async (req, res) => {
     return sendError(res, {
       statusCode: 400,
       message: error.message || 'Failed to update category',
+    });
+  }
+};
+
+/**
+ * Delete category (Admin)
+ * DELETE /api/categories/:id
+ */
+export const deleteCategory = async (req, res) => {
+  try {
+    const category = await Category.findById(req.params.id);
+    if (!category) {
+      return sendError(res, { statusCode: 404, message: 'Category not found' });
+    }
+
+    // Check if products exist in this category
+    const associatedProducts = await Product.countDocuments({ categoryId: req.params.id });
+    if (associatedProducts > 0) {
+      return sendError(res, {
+        statusCode: 400,
+        message: `Cannot delete category "${category.name}" because ${associatedProducts} product(s) are currently assigned to it. Please reassign products first or deactivate the category instead.`,
+      });
+    }
+
+    await Category.findByIdAndDelete(req.params.id);
+
+    await AuditLoggerService.logEvent({
+      userId: req.user?._id,
+      action: 'ADMIN_DELETE_CATEGORY',
+      resource: 'CATEGORY',
+      resourceId: req.params.id,
+      metadata: { name: category.name },
+    });
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: `Category "${category.name}" deleted successfully.`,
+    });
+  } catch (error) {
+    return sendError(res, {
+      statusCode: 400,
+      message: error.message || 'Failed to delete category',
     });
   }
 };

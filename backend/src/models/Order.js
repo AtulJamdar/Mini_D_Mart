@@ -107,10 +107,33 @@ const orderSchema = new mongoose.Schema(
     address: {
       type: deliveryAddressSchema,
     },
+    subtotal: {
+      type: Number,
+      default: 0,
+    },
+    taxAmount: {
+      type: Number,
+      default: 0,
+    },
+    deliveryFee: {
+      type: Number,
+      default: 0,
+    },
     totalAmount: {
       type: Number,
       required: [true, 'Total order amount is required'],
       min: [0, 'Total amount cannot be negative'],
+    },
+    paymentDetails: {
+      razorpayOrderId: { type: String, index: true },
+      razorpayPaymentId: { type: String, index: true },
+      razorpaySignature: { type: String },
+      status: {
+        type: String,
+        enum: ['pending', 'paid', 'refunded', 'failed'],
+        default: 'paid',
+      },
+      refundId: { type: String },
     },
     statusHistory: [statusHistorySchema],
   },

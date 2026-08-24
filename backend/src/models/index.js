@@ -7,6 +7,7 @@ import Order from './Order.js';
 import ReturnRequest from './ReturnRequest.js';
 import PickupSlot from './PickupSlot.js';
 import AuditLog from './AuditLog.js';
+import Otp from './Otp.js';
 
 export {
   User,
@@ -18,4 +19,6 @@ export {
   ReturnRequest,
   PickupSlot,
   AuditLog,
+  Otp,
 };
+

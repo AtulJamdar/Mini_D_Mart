@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import api from '../services/api';
+import EmptyState from './molecules/EmptyState';
 
 export default function ReturnQueueList({
   requests = [],
@@ -52,9 +53,11 @@ export default function ReturnQueueList({
 
   if (requests.length === 0) {
     return (
-      <div className="p-8 text-center bg-white rounded-2xl border border-border">
-        <p className="text-xs text-gray-500">No return or exchange requests in this queue.</p>
-      </div>
+      <EmptyState
+        illustration="🔄"
+        heading="No Pending Returns"
+        subtext="No return or exchange requests in this queue. All items have been processed."
+      />
     );
   }
 

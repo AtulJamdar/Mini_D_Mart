@@ -2,12 +2,14 @@ import mongoose from 'mongoose';
 
 const addressSchema = new mongoose.Schema(
   {
+    label: { type: String, trim: true, default: 'Home' },
     addressLine1: { type: String, required: true, trim: true },
     addressLine2: { type: String, trim: true },
     city: { type: String, required: true, trim: true },
-    state: { type: String, required: true, trim: true },
+    state: { type: String, trim: true, default: 'Maharashtra' },
     pincode: { type: String, required: true, trim: true },
     landmark: { type: String, trim: true },
+    phone: { type: String, trim: true },
     isDefault: { type: Boolean, default: false },
   },
   { _id: true }
@@ -22,15 +24,14 @@ const userSchema = new mongoose.Schema(
     },
     email: {
       type: String,
-      required: [true, 'Email is required'],
       unique: true,
+      sparse: true,
       lowercase: true,
       trim: true,
       index: true,
     },
     passwordHash: {
       type: String,
-      required: [true, 'Password hash is required'],
     },
     role: {
       type: String,
@@ -44,15 +45,33 @@ const userSchema = new mongoose.Schema(
     },
     phone: {
       type: String,
+      unique: true,
+      sparse: true,
       trim: true,
+      index: true,
     },
     isActive: {
       type: Boolean,
       default: true,
     },
+    mustChangePassword: {
+      type: Boolean,
+      default: false,
+    },
+    emailVerified: {
+      type: Boolean,
+      default: false,
+    },
     assignedStoreId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Store',
+    },
+    preferredLocation: {
+      label: { type: String, trim: true },
+      pincode: { type: String, trim: true },
+      city: { type: String, trim: true },
+      lat: { type: Number },
+      lng: { type: Number },
     },
     addresses: [addressSchema],
   },

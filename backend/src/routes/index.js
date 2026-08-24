@@ -7,6 +7,7 @@ import productRouter from './product.routes.js';
 import returnRouter from './return.routes.js';
 import categoryRouter from './category.routes.js';
 import adminRouter from './admin.routes.js';
+import paymentRouter from './payment.routes.js';
 
 const apiRouter = Router();
 
@@ -14,6 +15,7 @@ const apiRouter = Router();
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/cart', cartRouter);
 apiRouter.use('/orders', orderRouter);
+apiRouter.use('/payments', paymentRouter);
 apiRouter.use('/stores', storeRouter);
 apiRouter.use('/products', productRouter);
 apiRouter.use('/returns', returnRouter);

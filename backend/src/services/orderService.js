@@ -3,155 +3,42 @@ import Cart from '../models/Cart.js';
 import Product from '../models/Product.js';
 import PickupSlot from '../models/PickupSlot.js';
 import Store from '../models/Store.js';
+import User from '../models/User.js';
+import Payment from '../models/Payment.js';
 import AuditLoggerService from './auditLogger.service.js';
+import emailService from './emailService.js';
+import razorpayService from './razorpayService.js';
+import OrderStatusService from './orderStatusService.js';
 
-// Explicit Order Lifecycle State Machine Map
-const ALLOWED_TRANSITIONS = {
-  placed: ['confirmed', 'cancelled'],
-  confirmed: ['preparing', 'cancelled'],
-  preparing: {
-    pickup: ['ready_for_pickup'],
-    delivery: ['out_for_delivery'],
-  },
-  ready_for_pickup: ['completed'],
-  out_for_delivery: ['completed'],
-  completed: [],
-  cancelled: [],
-};
+const LOW_STOCK_THRESHOLD = parseInt(process.env.LOW_STOCK_THRESHOLD, 10) || 5;
 
 class OrderService {
-  /**
-   * Validate state transition against the explicit state machine
-   */
+  // Delegate state machine methods to OrderStatusService
+  static getAllowedNextStates(currentStatus) {
+    return OrderStatusService.getAllowedNextStates(currentStatus);
+  }
+
   static validateTransition(currentStatus, targetStatus, fulfillmentType) {
-    const normCurrent = currentStatus.toLowerCase();
-    const normTarget = targetStatus.toLowerCase();
+    return OrderStatusService.validateTransition(currentStatus, targetStatus, fulfillmentType);
+  }
 
-    if (normCurrent === normTarget) {
-      throw new Error(`Order is already in "${normCurrent}" status.`);
-    }
+  static restoreInventoryAndSlot(order) {
+    return OrderStatusService.restoreInventoryAndSlot(order);
+  }
 
-    const transitions = ALLOWED_TRANSITIONS[normCurrent];
-    if (!transitions) {
-      throw new Error(`Unknown current order status: "${normCurrent}".`);
-    }
+  static transitionOrderStatus(orderId, newStatus, options) {
+    return OrderStatusService.transitionOrderStatus(orderId, newStatus, options);
+  }
 
-    let allowed = [];
-    if (Array.isArray(transitions)) {
-      allowed = transitions;
-    } else if (typeof transitions === 'object') {
-      allowed = transitions[fulfillmentType] || [];
-    }
-
-    if (!allowed.includes(normTarget)) {
-      throw new Error(
-        `Invalid status transition from "${normCurrent.toUpperCase()}" to "${normTarget.toUpperCase()}". Allowed next states: [${allowed.map((s) => s.toUpperCase()).join(', ') || 'NONE - Terminal State'}].`
-      );
-    }
-
-    return normTarget;
+  static cancelOrder(orderId, userId, note) {
+    return OrderStatusService.cancelOrder(orderId, userId, note);
   }
 
   /**
-   * Helper: Restore inventory and release pickup slot on order cancellation
+   * Phase 1: Prepare checkout session and create a Razorpay Order
+   * Validates cart, stock, and slot availability; stores pending Payment reference.
    */
-  static async restoreInventoryAndSlot(order) {
-    // Restore Product stock
-    for (const item of order.items) {
-      try {
-        await Product.findByIdAndUpdate(item.productId, {
-          $inc: { stock: item.qty },
-        });
-      } catch (err) {
-        console.error(`[Restitution Error] Failed to restore product ${item.productId}:`, err.message);
-      }
-    }
-
-    // Restore Pickup Slot booking if pickup order
-    if (order.fulfillmentType === 'pickup' && order.pickupSlotId) {
-      try {
-        await PickupSlot.findByIdAndUpdate(order.pickupSlotId, {
-          $inc: { bookedCount: -1 },
-        });
-      } catch (err) {
-        console.error(`[Restitution Error] Failed to release slot ${order.pickupSlotId}:`, err.message);
-      }
-    }
-  }
-
-  /**
-   * Transition order status via State Machine
-   */
-  static async transitionOrderStatus(orderId, newStatus, { actorId, actorRole = 'staff', note = '' }) {
-    const order = await Order.findById(orderId);
-    if (!order) {
-      throw new Error('Order not found.');
-    }
-
-    const validatedStatus = this.validateTransition(
-      order.status,
-      newStatus,
-      order.fulfillmentType
-    );
-
-    // If transitioning to CANCELLED, restore inventory
-    if (validatedStatus === 'cancelled') {
-      await this.restoreInventoryAndSlot(order);
-    }
-
-    const previousStatus = order.status;
-    order.status = validatedStatus;
-    order.statusHistory.push({
-      status: validatedStatus,
-      timestamp: new Date(),
-      note: note || `Status updated from ${previousStatus.toUpperCase()} to ${validatedStatus.toUpperCase()} by ${actorRole}.`,
-      updatedBy: actorId,
-    });
-
-    await order.save();
-
-    await AuditLoggerService.logEvent({
-      userId: actorId,
-      action: 'ORDER_STATUS_TRANSITION',
-      resource: 'ORDER',
-      resourceId: order._id,
-      metadata: {
-        from: previousStatus,
-        to: validatedStatus,
-        actorRole,
-        note,
-      },
-    });
-
-    return order;
-  }
-
-  /**
-   * Customer Self-Cancellation (Allowed only from PLACED or CONFIRMED)
-   */
-  static async cancelOrder(orderId, userId, note = 'Cancelled by customer') {
-    const order = await Order.findOne({ _id: orderId, userId });
-    if (!order) {
-      throw new Error('Order not found or does not belong to this account.');
-    }
-
-    if (!['placed', 'confirmed'].includes(order.status)) {
-      throw new Error(
-        `Order cannot be cancelled in "${order.status.toUpperCase()}" status. Cancellation is only allowed when order is PLACED or CONFIRMED.`
-      );
-    }
-
-    return this.transitionOrderStatus(order._id, 'cancelled', {
-      actorId: userId,
-      actorRole: 'customer',
-      note,
-    });
-  }
-
-  /**
-   * Process checkout with initial state PLACED
-   */
-  static async checkout(userId, { fulfillmentType, storeId, pickupSlotId, address }) {
+  static async prepareCheckoutSession(userId, { fulfillmentType, storeId, pickupSlotId, address }) {
     const cart = await Cart.findOne({ userId });
     if (!cart || !cart.items || cart.items.length === 0) {
       throw new Error('Your cart is empty. Please add items before checking out.');
@@ -161,13 +48,10 @@ class OrderService {
       throw new Error('Invalid fulfillment type. Must be "pickup" or "delivery".');
     }
 
-    let reservedSlot = null;
     let selectedStoreId = storeId;
 
     if (fulfillmentType === 'pickup') {
-      if (!storeId || !pickupSlotId) {
-        throw new Error('Pickup orders require both storeId and pickupSlotId.');
-      }
+      if (!storeId || !pickupSlotId) throw new Error('Pickup orders require both storeId and pickupSlotId.');
       const store = await Store.findById(storeId);
       if (!store || !store.isActive) throw new Error('Selected store is not available.');
 
@@ -176,13 +60,6 @@ class OrderService {
       if (slot.bookedCount >= slot.maxOrders) {
         throw new Error(`Pickup slot is full (${slot.bookedCount}/${slot.maxOrders}). Choose another slot.`);
       }
-
-      reservedSlot = await PickupSlot.findOneAndUpdate(
-        { _id: pickupSlotId, storeId, bookedCount: { $lt: slot.maxOrders } },
-        { $inc: { bookedCount: 1 } },
-        { new: true }
-      );
-      if (!reservedSlot) throw new Error('Pickup slot just reached full capacity.');
     }
 
     let deliveryAddress = null;
@@ -203,126 +80,367 @@ class OrderService {
       }
     }
 
-    // Atomic Stock Verification & Decrement
-    const decrementedProducts = [];
-    const orderItems = [];
+    // Preliminary inventory and price validation
+    const checkoutItems = [];
     let subtotal = 0;
 
-    try {
-      for (const item of cart.items) {
-        const product = await Product.findById(item.productId);
-        if (!product) throw new Error(`Product "${item.productId}" not found.`);
-
-        const updatedProduct = await Product.findOneAndUpdate(
-          { _id: item.productId, stock: { $gte: item.qty } },
-          { $inc: { stock: -item.qty } },
-          { new: true }
-        );
-
-        if (!updatedProduct) {
-          throw new Error(`Insufficient stock for "${product.name}". Available: ${product.stock}, Requested: ${item.qty}.`);
-        }
-
-        decrementedProducts.push({ productId: item.productId, qty: item.qty });
-        subtotal += product.price * item.qty;
-        orderItems.push({ productId: product._id, qty: item.qty, priceAtOrder: product.price });
+    for (const item of cart.items) {
+      const product = await Product.findById(item.productId);
+      if (!product) throw new Error(`Product "${item.productId}" not found.`);
+      if (product.stock < item.qty) {
+        throw new Error(`Insufficient stock for "${product.name}". Only ${product.stock} units available.`);
       }
+      checkoutItems.push({
+        productId: product._id,
+        name: product.name,
+        qty: item.qty,
+        price: product.price,
+      });
+      subtotal += product.price * item.qty;
+    }
 
-      const tax = Math.round(subtotal * 0.05 * 100) / 100;
-      const totalAmount = Math.round((subtotal + tax) * 100) / 100;
+    const taxAmount = Math.round(subtotal * 0.05 * 100) / 100;
+    const deliveryFee = fulfillmentType === 'delivery' && subtotal < 500 ? 30.0 : 0.0;
+    const totalAmount = Math.round((subtotal + taxAmount + deliveryFee) * 100) / 100;
+    const amountPaise = Math.round(totalAmount * 100);
 
-      const order = await Order.create({
-        userId,
-        items: orderItems,
-        status: 'placed',
+    // Create Razorpay Order via SDK / Mock
+    const razorpayOrder = await razorpayService.createRazorpayOrder({
+      amount: amountPaise,
+      currency: 'INR',
+      receipt: `rcpt_${Date.now()}`,
+      notes: { userId: userId.toString(), fulfillmentType },
+    });
+
+    const payment = await Payment.create({
+      userId,
+      razorpayOrderId: razorpayOrder.id,
+      amount: amountPaise,
+      currency: 'INR',
+      status: 'created',
+      checkoutDetails: {
         fulfillmentType,
         storeId: selectedStoreId,
         pickupSlotId: fulfillmentType === 'pickup' ? pickupSlotId : undefined,
         address: fulfillmentType === 'delivery' ? deliveryAddress : undefined,
+        items: checkoutItems,
+        subtotal,
+        taxAmount,
+        deliveryFee,
         totalAmount,
-        statusHistory: [
-          {
-            status: 'placed',
-            timestamp: new Date(),
-            note: 'Order placed by customer.',
-            updatedBy: userId,
-          },
-        ],
-      });
-
-      cart.items = [];
-      await cart.save();
-
-      return order;
-    } catch (err) {
-      for (const p of decrementedProducts) {
-        await Product.findByIdAndUpdate(p.productId, { $inc: { stock: p.qty } }).catch(() => {});
-      }
-      if (reservedSlot) {
-        await PickupSlot.findByIdAndUpdate(pickupSlotId, { $inc: { bookedCount: -1 } }).catch(() => {});
-      }
-      throw err;
-    }
-  }
-
-  /**
-   * Get paginated orders
-   */
-  static async getOrdersPaginated({ userId = null, role = 'customer', storeId = null, page = 1, limit = 10, status = null }) {
-    const filter = {};
-    if (role === 'customer' || userId) {
-      filter.userId = userId;
-    }
-    if (storeId && ['store_staff', 'store_manager'].includes(role)) {
-      filter.storeId = storeId;
-    }
-    if (status) {
-      filter.status = status.toLowerCase();
-    }
-
-    const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10) || 10));
-    const skip = (pageNum - 1) * limitNum;
-
-    const [orders, total] = await Promise.all([
-      Order.find(filter)
-        .populate('items.productId', 'name price unit images')
-        .populate('storeId', 'name address')
-        .populate('pickupSlotId', 'startTime endTime')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum),
-      Order.countDocuments(filter),
-    ]);
+      },
+    });
 
     return {
-      orders,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        pages: Math.ceil(total / limitNum) || 1,
+      paymentId: payment._id,
+      razorpayOrderId: razorpayOrder.id,
+      amount: amountPaise,
+      currency: 'INR',
+      keyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_mock',
+      metadata: {
+        totalAmount,
+        subtotal,
+        taxAmount,
+        deliveryFee,
       },
     };
   }
 
   /**
-   * Get single order by ID with populated references
+   * Phase 2: Complete order upon verified payment (Client verify or Webhook)
+   * Enforces atomic idempotency, stock/slot re-check, and automatic refund on sellout.
    */
-  static async getOrderById(orderId, userId = null, role = 'customer') {
-    const query = { _id: orderId };
-    if (role === 'customer' && userId) {
-      query.userId = userId;
+  static async completeOrderFromPayment(razorpayOrderId, { paymentId, signature, verifiedVia = 'client' }) {
+    // 1. Atomic status check & lock
+    const payment = await Payment.findOneAndUpdate(
+      { razorpayOrderId, status: { $in: ['created', 'processing'] } },
+      {
+        $set: {
+          status: 'processing',
+          razorpayPaymentId: paymentId || undefined,
+          razorpaySignature: signature || undefined,
+        },
+      },
+      { returnDocument: 'after' }
+    );
+
+    if (!payment) {
+      const existing = await Payment.findOne({ razorpayOrderId });
+      if (existing && existing.status === 'paid' && existing.orderId) {
+        const order = await Order.findById(existing.orderId)
+          .populate('items.productId', 'name price images unit')
+          .populate('storeId', 'name address');
+        return { success: true, order, alreadyProcessed: true };
+      }
+      if (existing && existing.status === 'refunded_insufficient_stock') {
+        return {
+          success: false,
+          refunded: true,
+          statusCode: 409,
+          message: 'Payment received, but an item sold out before order could be finalized. A full refund has already been issued.',
+        };
+      }
+      throw new Error('Payment record not found or already finalized.');
     }
 
-    const order = await Order.findOne(query)
-      .populate('items.productId', 'name price unit images')
-      .populate('storeId', 'name address')
-      .populate('pickupSlotId', 'startTime endTime')
-      .populate('statusHistory.updatedBy', 'name role');
+    const { checkoutDetails, userId } = payment;
+    const decrementedProducts = [];
+    let stockFailure = null;
 
-    if (!order) {
-      throw new Error('Order not found or unauthorized.');
+    // 2. Atomic Stock & Slot Re-Check & Decrement
+    try {
+      for (const item of checkoutDetails.items) {
+        const updatedProduct = await Product.findOneAndUpdate(
+          { _id: item.productId, stock: { $gte: item.qty } },
+          { $inc: { stock: -item.qty } },
+          { returnDocument: 'after' }
+        );
+
+        if (!updatedProduct) {
+          const currentProd = await Product.findById(item.productId);
+          throw new Error(`Insufficient stock for "${currentProd ? currentProd.name : item.name}". Only ${currentProd ? currentProd.stock : 0} available.`);
+        }
+
+        decrementedProducts.push({ productId: item.productId, qty: item.qty, product: updatedProduct });
+      }
+
+      if (checkoutDetails.fulfillmentType === 'pickup' && checkoutDetails.pickupSlotId) {
+        const slot = await PickupSlot.findById(checkoutDetails.pickupSlotId);
+        if (!slot || slot.bookedCount >= slot.maxOrders) {
+          throw new Error('Selected pickup slot is full. Choose another slot.');
+        }
+        const reservedSlot = await PickupSlot.findOneAndUpdate(
+          { _id: checkoutDetails.pickupSlotId, bookedCount: { $lt: slot.maxOrders } },
+          { $inc: { bookedCount: 1 } },
+          { returnDocument: 'after' }
+        );
+        if (!reservedSlot) {
+          throw new Error('Selected pickup slot is full. Choose another slot.');
+        }
+      }
+    } catch (err) {
+      stockFailure = err;
+      // Rollback any products decremented before the failure
+      for (const rollback of decrementedProducts) {
+        await Product.findByIdAndUpdate(rollback.productId, { $inc: { stock: rollback.qty } }).catch(() => {});
+      }
+    }
+
+    // 3. Handle Race Condition: Auto-Refund when items/slots sell out
+    if (stockFailure) {
+      console.warn(`[AUTO-REFUND] Out of stock race condition for Razorpay Order ${razorpayOrderId}. Initiating refund...`);
+      let refundResult = null;
+      try {
+        if (paymentId) {
+          refundResult = await razorpayService.issueRefund({
+            paymentId,
+            amount: payment.amount,
+            notes: { reason: 'insufficient_stock_or_slot_at_completion', error: stockFailure.message },
+          });
+        }
+      } catch (refundErr) {
+        console.error('[AUTO-REFUND ERROR] Failed to issue refund:', refundErr.message);
+      }
+
+      payment.status = 'refunded_insufficient_stock';
+      payment.refundDetails = {
+        refundId: refundResult?.id || `rfnd_pending_${Date.now()}`,
+        amount: payment.amount,
+        reason: stockFailure.message,
+        timestamp: new Date(),
+      };
+      await payment.save();
+
+      await AuditLoggerService.logEvent({
+        userId,
+        action: 'PAYMENT_AUTO_REFUNDED_STOCK_UNAVAILABLE',
+        resource: 'PAYMENT',
+        resourceId: payment._id,
+        metadata: { razorpayOrderId, razorpayPaymentId: paymentId, error: stockFailure.message },
+      });
+
+      return {
+        success: false,
+        refunded: true,
+        statusCode: 409,
+        message: stockFailure.message,
+      };
+    }
+
+    // 4. Low stock threshold warnings
+    for (const dec of decrementedProducts) {
+      if (dec.product.stock <= LOW_STOCK_THRESHOLD) {
+        (async () => {
+          try {
+            const alertStore = await Store.findById(dec.product.storeId);
+            await emailService.sendLowStockAlert({
+              product: dec.product,
+              store: alertStore,
+              currentStock: dec.product.stock,
+              threshold: LOW_STOCK_THRESHOLD,
+            });
+          } catch (e) {
+            console.error(`[LowStockAlert Error] Product ${dec.product.name}:`, e.message);
+          }
+        })();
+      }
+    }
+
+    // 5. Create Order Document
+    const orderItems = checkoutDetails.items.map((i) => ({
+      productId: i.productId,
+      qty: i.qty,
+      priceAtOrder: i.price,
+    }));
+
+    const order = await Order.create({
+      userId,
+      items: orderItems,
+      status: 'placed',
+      fulfillmentType: checkoutDetails.fulfillmentType,
+      storeId: checkoutDetails.storeId,
+      pickupSlotId: checkoutDetails.pickupSlotId,
+      address: checkoutDetails.address,
+      subtotal: checkoutDetails.subtotal,
+      taxAmount: checkoutDetails.taxAmount,
+      deliveryFee: checkoutDetails.deliveryFee,
+      totalAmount: checkoutDetails.totalAmount,
+      paymentDetails: {
+        razorpayOrderId,
+        razorpayPaymentId: paymentId,
+        razorpaySignature: signature,
+        status: 'paid',
+      },
+      statusHistory: [
+        {
+          status: 'placed',
+          timestamp: new Date(),
+          actor: userId,
+          actorRole: 'customer',
+          note: `Order placed via verified Razorpay payment (${verifiedVia})`,
+        },
+      ],
+    });
+
+    // 6. Update Payment & Clear Cart
+    payment.status = 'paid';
+    payment.orderId = order._id;
+    if (paymentId) payment.razorpayPaymentId = paymentId;
+    if (signature) payment.razorpaySignature = signature;
+    await payment.save();
+
+    await Cart.findOneAndUpdate({ userId }, { $set: { items: [] } });
+
+    await AuditLoggerService.logEvent({
+      userId,
+      action: 'ORDER_CREATED_PAID',
+      resource: 'ORDER',
+      resourceId: order._id,
+      metadata: {
+        totalAmount: order.totalAmount,
+        razorpayOrderId,
+        razorpayPaymentId: paymentId,
+        fulfillmentType: order.fulfillmentType,
+      },
+    });
+
+    // 7. Send Order Confirmation Email asynchronously
+    (async () => {
+      try {
+        const customer = await User.findById(userId);
+        const orderWithDetails = await Order.findById(order._id)
+          .populate('items.productId', 'name price images unit')
+          .populate('storeId', 'name address');
+        const storeObj = orderWithDetails?.storeId || (await Store.findById(checkoutDetails.storeId));
+
+        await emailService.sendOrderConfirmationEmail({
+          order: orderWithDetails || order,
+          user: customer,
+          store: storeObj,
+        });
+      } catch (err) {
+        console.error('[OrderConfirmation Email Error]:', err.message);
+      }
+    })();
+
+    const populatedOrder = await Order.findById(order._id)
+      .populate('items.productId', 'name price images unit')
+      .populate('storeId', 'name address');
+
+    return { success: true, order: populatedOrder || order };
+  }
+
+  /**
+   * Direct checkout helper (executes prepare + complete flow)
+   */
+  static async checkout(userId, { fulfillmentType, storeId, pickupSlotId, address }) {
+    const session = await this.prepareCheckoutSession(userId, {
+      fulfillmentType,
+      storeId,
+      pickupSlotId,
+      address,
+    });
+
+    const mockPaymentId = `pay_direct_${Date.now()}`;
+    const mockSignature = `sig_direct_${Date.now()}`;
+
+    const result = await this.completeOrderFromPayment(session.razorpayOrderId, {
+      paymentId: mockPaymentId,
+      signature: mockSignature,
+      verifiedVia: 'direct_checkout',
+    });
+
+    if (result.refunded) {
+      throw new Error(result.message);
+    }
+
+    return result.order;
+  }
+
+  static async getOrdersPaginated({ userId, role = 'customer', storeId = null, page = 1, limit = 10, status = null } = {}) {
+    const filter = {};
+    if (role === 'customer' && userId) {
+      filter.userId = userId;
+    }
+    if (storeId) {
+      filter.storeId = storeId;
+    }
+    if (status) {
+      filter.status = status;
+    }
+    return this.getOrders(filter, { page, limit });
+  }
+
+  static async getOrders(filter = {}, { page = 1, limit = 10, sort = { createdAt: -1 } } = {}) {
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 10));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [orders, total] = await Promise.all([
+      Order.find(filter)
+        .populate('items.productId', 'name price images unit')
+        .populate('storeId', 'name address')
+        .populate('pickupSlotId', 'startTime endTime')
+        .populate('userId', 'name email')
+        .sort(sort)
+        .skip(skip)
+        .limit(limitNum),
+      Order.countDocuments(filter),
+    ]);
+
+    return { orders, pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) || 1 } };
+  }
+
+  static async getOrderById(orderId, userId = null, role = null) {
+    const order = await Order.findById(orderId)
+      .populate('items.productId', 'name price images unit isReturnable returnWindowHours')
+      .populate('storeId', 'name address geo')
+      .populate('pickupSlotId', 'startTime endTime bookedCount maxOrders')
+      .populate('userId', 'name email phone');
+
+    if (!order) throw new Error('Order not found');
+    if (role === 'customer' && userId && order.userId._id.toString() !== userId.toString()) {
+      throw new Error('You are not authorized to view this order.');
     }
     return order;
   }

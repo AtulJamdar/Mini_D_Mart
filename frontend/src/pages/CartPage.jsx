@@ -1,9 +1,11 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useCart } from '../context/CartContext';
+import EmptyState from '../components/molecules/EmptyState';
+import CartItemRow from '../components/cart/CartItemRow';
 
 export default function CartPage() {
-  const { cart, loading, actionLoading, updateQty, removeItem, error, clearError } = useCart();
+  const { cart, loading, actionLoading, error, clearError } = useCart();
   const navigate = useNavigate();
 
   if (loading && (!cart || cart.items.length === 0)) {
@@ -19,20 +21,14 @@ export default function CartPage() {
 
   if (!cart || cart.items.length === 0) {
     return (
-      <div className="max-w-3xl mx-auto bg-white p-8 rounded-2xl shadow-sm border border-border text-center">
-        <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4 text-3xl">
-          🛒
-        </div>
-        <h1 className="text-2xl font-bold text-text mb-2">Your Cart is Empty</h1>
-        <p className="text-sm text-gray-500 mb-6 max-w-sm mx-auto">
-          Explore fresh vegetables, dairy, snacks, and essentials from Mini D-Mart.
-        </p>
-        <Link
-          to="/shop"
-          className="inline-flex items-center gap-2 px-6 py-2.5 bg-primary text-white font-medium rounded-xl hover:opacity-90 transition-opacity text-sm shadow-xs"
-        >
-          Browse Products
-        </Link>
+      <div className="max-w-3xl mx-auto">
+        <EmptyState
+          illustration="🛒"
+          heading="No items in your cart"
+          subtext="Browse from our wide variety of products & exciting offers"
+          ctaLabel="START SHOPPING"
+          onCtaClick={() => navigate('/shop')}
+        />
       </div>
     );
   }
@@ -64,77 +60,14 @@ export default function CartPage() {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Cart Item List */}
+        {/* Cart Item List using shared CartItemRow */}
         <div className="lg:col-span-2 space-y-3">
           {cart.items.map((item) => (
-            <div
+            <CartItemRow
               key={item._id || item.productId}
-              className="bg-white rounded-2xl border border-border p-4 shadow-xs flex gap-4 items-center"
-            >
-              {/* Product Image */}
-              <div className="w-20 h-20 rounded-xl bg-bg border border-border/50 overflow-hidden flex-shrink-0 flex items-center justify-center">
-                {item.images && item.images[0] ? (
-                  <img
-                    src={item.images[0]}
-                    alt={item.name}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <span className="text-2xl">📦</span>
-                )}
-              </div>
-
-              {/* Product Details */}
-              <div className="flex-1 min-w-0">
-                <h3 className="font-semibold text-text text-sm truncate">{item.name}</h3>
-                <p className="text-xs text-gray-500 mt-0.5">Unit: {item.unit}</p>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-sm font-bold text-primary">₹{item.price.toFixed(2)}</span>
-                  {item.availableStock <= 5 && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent font-semibold">
-                      Only {item.availableStock} left
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Quantity Stepper */}
-              <div className="flex items-center gap-2">
-                <div className="flex items-center border border-border rounded-lg bg-bg overflow-hidden">
-                  <button
-                    type="button"
-                    disabled={actionLoading || item.qty <= 1}
-                    onClick={() => updateQty(item.productId, item.qty - 1)}
-                    className="px-2.5 py-1 text-sm font-bold text-gray-500 hover:text-text hover:bg-white transition-colors disabled:opacity-40 cursor-pointer"
-                  >
-                    -
-                  </button>
-                  <span className="px-3 py-1 text-xs font-bold text-text min-w-[28px] text-center">
-                    {item.qty}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={actionLoading || item.qty >= item.availableStock}
-                    onClick={() => updateQty(item.productId, item.qty + 1)}
-                    className="px-2.5 py-1 text-sm font-bold text-gray-500 hover:text-text hover:bg-white transition-colors disabled:opacity-40 cursor-pointer"
-                    title={item.qty >= item.availableStock ? 'Max stock reached' : 'Add 1'}
-                  >
-                    +
-                  </button>
-                </div>
-
-                {/* Remove button */}
-                <button
-                  type="button"
-                  disabled={actionLoading}
-                  onClick={() => removeItem(item.productId)}
-                  className="p-1.5 text-gray-500 hover:text-error rounded-lg hover:bg-error/10 transition-colors cursor-pointer"
-                  title="Remove item"
-                >
-                  <span className="text-sm">🗑️</span>
-                </button>
-              </div>
-            </div>
+              item={item}
+              compact={false}
+            />
           ))}
         </div>
 

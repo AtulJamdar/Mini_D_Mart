@@ -9,6 +9,9 @@ import { sendSuccess, sendError } from '../utils/responseHelper.js';
 
 const BCRYPT_ROUNDS = 12;
 
+// Re-export staff controllers from modular adminStaff.controller.js
+export { getStaff, createStaff, updateStaff } from './adminStaff.controller.js';
+
 /**
  * Get system-wide overview KPI statistics
  * GET /api/admin/overview
@@ -93,56 +96,6 @@ export const getUsers = async (req, res) => {
 };
 
 /**
- * Create a staff / manager / admin account
- * POST /api/admin/users
- */
-export const createUser = async (req, res) => {
-  try {
-    const { name, email, password, role, phone, assignedStoreId } = req.body;
-
-    if (!name || !email || !password) {
-      return sendError(res, { statusCode: 400, message: 'Name, email, and password are required.' });
-    }
-
-    const existing = await User.findOne({ email: email.toLowerCase().trim() });
-    if (existing) {
-      return sendError(res, { statusCode: 409, message: 'User with this email already exists.' });
-    }
-
-    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-
-    const user = await User.create({
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
-      passwordHash,
-      role: role || 'store_staff',
-      phone: phone?.trim(),
-      assignedStoreId: assignedStoreId || undefined,
-      isActive: true,
-    });
-
-    await AuditLoggerService.logEvent({
-      userId: req.user._id,
-      action: 'ADMIN_CREATE_USER',
-      resource: 'USER',
-      resourceId: user._id,
-      metadata: { email: user.email, role: user.role, createdBy: req.user.email },
-    });
-
-    const userObj = user.toObject();
-    delete userObj.passwordHash;
-
-    return sendSuccess(res, {
-      statusCode: 201,
-      data: userObj,
-      message: `Account for "${user.name}" (${user.role}) created successfully.`,
-    });
-  } catch (error) {
-    return sendError(res, { statusCode: 400, message: error.message || 'Failed to create user' });
-  }
-};
-
-/**
  * Update user role, active status, or store assignment
  * PATCH /api/admin/users/:id
  */
@@ -192,8 +145,20 @@ export const getAuditLogs = async (req, res) => {
 
     if (from || to) {
       filter.createdAt = {};
-      if (from) filter.createdAt.$gte = new Date(from);
-      if (to) filter.createdAt.$lte = new Date(to);
+      if (from) {
+        const fromDate = new Date(from);
+        if (!isNaN(fromDate.getTime())) filter.createdAt.$gte = fromDate;
+      }
+      if (to) {
+        const toDate = new Date(to);
+        if (!isNaN(toDate.getTime())) {
+          // If to date is just date without time, set to end of day
+          if (typeof to === 'string' && to.length === 10) {
+            toDate.setHours(23, 59, 59, 999);
+          }
+          filter.createdAt.$lte = toDate;
+        }
+      }
     }
 
     const pageNum = Math.max(1, parseInt(page, 10) || 1);

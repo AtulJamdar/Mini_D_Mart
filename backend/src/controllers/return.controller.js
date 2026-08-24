@@ -64,13 +64,21 @@ export const createReturn = async (req, res) => {
  */
 export const getReturns = async (req, res) => {
   try {
-    const { status, storeId } = req.query;
+    const { status } = req.query;
+    let targetStoreId = req.query.storeId || null;
+
+    // Strict server-side store scoping for staff & manager
+    if (['store_staff', 'store_manager'].includes(req.user.role)) {
+      if (req.user.assignedStoreId) {
+        targetStoreId = req.user.assignedStoreId;
+      }
+    }
 
     const requests = await ReturnService.getReturns({
       userId: req.user._id,
       role: req.user.role,
       status,
-      storeId,
+      storeId: targetStoreId,
     });
 
     return sendSuccess(res, {
@@ -133,3 +141,26 @@ export const rejectReturn = async (req, res) => {
     });
   }
 };
+
+/**
+ * Issue Razorpay refund for an approved return request (Store Manager / Admin)
+ * POST /api/returns/:id/refund
+ */
+export const refundReturn = async (req, res) => {
+  try {
+    const result = await ReturnService.refundReturnRequest(req.params.id, req.user._id);
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      data: result,
+      message: 'Razorpay refund issued successfully and return marked as completed.',
+    });
+  } catch (error) {
+    return sendError(res, {
+      statusCode: 400,
+      message: error.message || 'Failed to issue refund for return request',
+      error: error.message,
+    });
+  }
+};
+

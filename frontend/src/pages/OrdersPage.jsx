@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import api from '../services/api';
+import EmptyState from '../components/molecules/EmptyState';
+import AccountSidebar from '../components/account/AccountSidebar';
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState([]);
   const [pagination, setPagination] = useState({ total: 0, page: 1, pages: 1, limit: 6 });
   const [statusFilter, setStatusFilter] = useState('');
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
 
   const fetchOrders = async (page = 1, status = '') => {
     setLoading(true);
@@ -65,19 +68,22 @@ export default function OrdersPage() {
   ];
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-text">My Orders</h1>
-          <p className="text-sm text-gray-500">Track current status and review order history</p>
+    <div className="max-w-6xl mx-auto flex flex-col lg:flex-row gap-6">
+      <AccountSidebar />
+
+      <main className="flex-1 space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-text">My Orders</h1>
+            <p className="text-sm text-gray-500">Track current status and review order history</p>
+          </div>
+          <Link
+            to="/shop"
+            className="inline-flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-xs font-semibold rounded-xl hover:opacity-90 transition-opacity w-fit"
+          >
+            + New Order
+          </Link>
         </div>
-        <Link
-          to="/shop"
-          className="inline-flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-xs font-semibold rounded-xl hover:opacity-90 transition-opacity w-fit"
-        >
-          + New Order
-        </Link>
-      </div>
 
       {/* Filter Tabs */}
       <div className="flex gap-2 overflow-x-auto pb-1 text-xs">
@@ -101,17 +107,13 @@ export default function OrdersPage() {
           <div className="w-8 h-8 border-3 border-primary border-t-transparent rounded-full animate-spin"></div>
         </div>
       ) : orders.length === 0 ? (
-        <div className="p-8 text-center bg-white rounded-2xl border border-border shadow-xs">
-          <div className="text-4xl mb-3">📦</div>
-          <h2 className="text-lg font-bold text-text mb-1">No Orders Found</h2>
-          <p className="text-xs text-gray-500 mb-4">No matching orders found for this view.</p>
-          <Link
-            to="/shop"
-            className="inline-block px-4 py-2 bg-primary text-white text-xs font-semibold rounded-xl hover:opacity-90 transition-opacity"
-          >
-            Browse Catalog
-          </Link>
-        </div>
+        <EmptyState
+          illustration="📦"
+          heading="You do not have any previous orders"
+          subtext="Browse from our wide variety of products & exciting offers"
+          ctaLabel="START SHOPPING"
+          onCtaClick={() => navigate('/shop')}
+        />
       ) : (
         <div className="space-y-4">
           {orders.map((order) => (
@@ -187,6 +189,7 @@ export default function OrdersPage() {
           )}
         </div>
       )}
+      </main>
     </div>
   );
 }

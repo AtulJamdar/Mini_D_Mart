@@ -1,20 +1,30 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import OrderQueueList from '../components/OrderQueueList';
 import ReturnQueueList from '../components/ReturnQueueList';
 
 export default function StaffPage() {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('pickup');
   const [orders, setOrders] = useState([]);
   const [returns, setReturns] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const loadStaffData = async () => {
+  const loadStaffData = useCallback(async () => {
     setLoading(true);
     try {
+      const storeId = user?.assignedStoreId?._id || user?.assignedStoreId;
+      const orderParams = { limit: 50 };
+      const returnParams = { status: 'requested' };
+      if (storeId) {
+        orderParams.storeId = storeId;
+        returnParams.storeId = storeId;
+      }
+
       const [ordersRes, returnsRes] = await Promise.all([
-        api.get('/orders', { params: { limit: 50 } }),
-        api.get('/returns', { params: { status: 'requested' } }),
+        api.get('/orders', { params: orderParams }),
+        api.get('/returns', { params: returnParams }),
       ]);
 
       if (ordersRes.data.success) {
@@ -28,11 +38,11 @@ export default function StaffPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
     loadStaffData();
-  }, []);
+  }, [loadStaffData]);
 
   const pickupOrders = orders.filter(
     (o) => o.fulfillmentType === 'pickup' && o.status !== 'completed' && o.status !== 'cancelled'
@@ -52,16 +62,18 @@ export default function StaffPage() {
           </p>
         </div>
         <button
+          type="button"
           onClick={loadStaffData}
-          className="px-3.5 py-1.5 border border-border bg-white text-xs font-semibold rounded-xl hover:bg-bg cursor-pointer"
+          className="px-3.5 py-1.5 border border-border bg-white text-xs font-semibold rounded-xl hover:bg-bg cursor-pointer shadow-2xs"
         >
           &#8635; Refresh Queues
         </button>
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex gap-2 text-xs border-b border-border pb-2">
+      <div className="flex gap-2 text-xs border-b border-border pb-2 overflow-x-auto scrollbar-none whitespace-nowrap">
         <button
+          type="button"
           onClick={() => setActiveTab('pickup')}
           className={`px-4 py-2 rounded-xl font-bold transition-all cursor-pointer ${
             activeTab === 'pickup'
@@ -73,6 +85,7 @@ export default function StaffPage() {
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveTab('delivery')}
           className={`px-4 py-2 rounded-xl font-bold transition-all cursor-pointer ${
             activeTab === 'delivery'
@@ -84,6 +97,7 @@ export default function StaffPage() {
         </button>
 
         <button
+          type="button"
           onClick={() => setActiveTab('returns')}
           className={`px-4 py-2 rounded-xl font-bold transition-all cursor-pointer ${
             activeTab === 'returns'

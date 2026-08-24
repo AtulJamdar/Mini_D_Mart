@@ -2,7 +2,11 @@ import Product from '../models/Product.js';
 import Category from '../models/Category.js';
 import Store from '../models/Store.js';
 import PickupSlot from '../models/PickupSlot.js';
+import emailService from '../services/emailService.js';
+import AuditLoggerService from '../services/auditLogger.service.js';
 import { sendSuccess, sendError } from '../utils/responseHelper.js';
+
+const LOW_STOCK_THRESHOLD = parseInt(process.env.LOW_STOCK_THRESHOLD, 10) || 5;
 
 /**
  * Get all products with category and stock info
@@ -10,8 +14,15 @@ import { sendSuccess, sendError } from '../utils/responseHelper.js';
  */
 export const getProducts = async (req, res) => {
   try {
-    const { category, search, storeId } = req.query;
+    const { category, search, storeId, ids } = req.query;
     const filter = {};
+
+    if (ids) {
+      const idList = ids.split(',').map((id) => id.trim()).filter(Boolean);
+      if (idList.length > 0) {
+        filter._id = { $in: idList };
+      }
+    }
 
     if (category) filter.categoryId = category;
     if (storeId) filter.storeId = storeId;
@@ -52,17 +63,51 @@ export const updateProductStock = async (req, res) => {
       });
     }
 
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
-      { stock: newStock },
-      { new: true }
-    ).populate('categoryId', 'name');
-
-    if (!product) {
+    const existingProduct = await Product.findById(req.params.id);
+    if (!existingProduct) {
       return sendError(res, {
         statusCode: 404,
         message: 'Product not found.',
       });
+    }
+
+    // Server-side check: store_manager can only update stock for their assigned store
+    if (req.user?.role === 'store_manager' && req.user.assignedStoreId) {
+      const productStoreId = existingProduct.storeId?._id?.toString() || existingProduct.storeId?.toString();
+      if (productStoreId && productStoreId !== req.user.assignedStoreId.toString()) {
+        return sendError(res, {
+          statusCode: 403,
+          message: 'Access denied. You can only update inventory for your assigned store.',
+        });
+      }
+    }
+
+    existingProduct.stock = newStock;
+    const product = await existingProduct.save();
+    await product.populate('categoryId', 'name');
+
+    await AuditLoggerService.logEvent({
+      userId: req.user?._id,
+      action: 'ADMIN_UPDATE_PRODUCT_STOCK',
+      resource: 'PRODUCT',
+      resourceId: product._id,
+      metadata: { productName: product.name, newStock: product.stock, storeId: product.storeId },
+    });
+
+    if (product.stock <= LOW_STOCK_THRESHOLD) {
+      (async () => {
+        try {
+          const store = await Store.findById(product.storeId);
+          await emailService.sendLowStockAlert({
+            product,
+            store,
+            currentStock: product.stock,
+            threshold: LOW_STOCK_THRESHOLD,
+          });
+        } catch (err) {
+          console.error(`[LowStockAlert Error] Product ${product.name}:`, err.message);
+        }
+      })();
     }
 
     return sendSuccess(res, {

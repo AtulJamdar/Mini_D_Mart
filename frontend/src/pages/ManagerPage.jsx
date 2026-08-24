@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import api from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import InventoryTable from '../components/InventoryTable';
 import OrderQueueList from '../components/OrderQueueList';
 import ReturnQueueList from '../components/ReturnQueueList';
 
 export default function ManagerPage() {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState('inventory');
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -17,17 +19,29 @@ export default function ManagerPage() {
   });
   const [loading, setLoading] = useState(true);
 
-  const loadManagerData = async () => {
+  const loadManagerData = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Load Stores to get primary store ID
-      const storeRes = await api.get('/stores');
-      const storeId = storeRes.data.data?.[0]?._id;
+      // 1. Determine Store ID (from assignedStore or primary active store)
+      let storeId = user?.assignedStoreId?._id || user?.assignedStoreId;
+      if (!storeId) {
+        const storeRes = await api.get('/stores');
+        storeId = storeRes.data.data?.[0]?._id;
+      }
+
+      const orderParams = { limit: 50 };
+      const prodParams = {};
+      const returnParams = {};
+      if (storeId) {
+        orderParams.storeId = storeId;
+        prodParams.storeId = storeId;
+        returnParams.storeId = storeId;
+      }
 
       const [prodRes, ordersRes, returnsRes, analyticsRes] = await Promise.all([
-        api.get('/products'),
-        api.get('/orders', { params: { limit: 50 } }),
-        api.get('/returns'),
+        api.get('/products', { params: prodParams }),
+        api.get('/orders', { params: orderParams }),
+        api.get('/returns', { params: returnParams }),
         storeId ? api.get(`/stores/${storeId}/analytics`) : Promise.resolve({ data: { success: false } }),
       ]);
 
@@ -40,11 +54,11 @@ export default function ManagerPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
     loadManagerData();
-  }, []);
+  }, [loadManagerData]);
 
   const pickupOrders = orders.filter(
     (o) => o.fulfillmentType === 'pickup' && o.status !== 'completed' && o.status !== 'cancelled'
@@ -64,8 +78,9 @@ export default function ManagerPage() {
           <p className="text-sm text-gray-500">Live store metrics, inventory replenishment, and operations control.</p>
         </div>
         <button
+          type="button"
           onClick={loadManagerData}
-          className="px-3.5 py-1.5 border border-border bg-white text-xs font-semibold rounded-xl hover:bg-bg cursor-pointer"
+          className="px-3.5 py-1.5 border border-border bg-white text-xs font-semibold rounded-xl hover:bg-bg cursor-pointer shadow-2xs"
         >
           &#8635; Refresh Dashboard
         </button>
@@ -75,15 +90,15 @@ export default function ManagerPage() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-4 rounded-2xl border border-border shadow-xs">
           <div className="text-[11px] font-bold uppercase text-gray-500">Today's Sales</div>
-          <div className="text-2xl font-bold text-primary mt-1">₹{analytics.todaySales.toFixed(2)}</div>
+          <div className="text-2xl font-bold text-primary mt-1">₹{Number(analytics.todaySales || 0).toFixed(2)}</div>
         </div>
         <div className="bg-white p-4 rounded-2xl border border-border shadow-xs">
           <div className="text-[11px] font-bold uppercase text-gray-500">Active Orders</div>
-          <div className="text-2xl font-bold text-info mt-1">{analytics.activeOrdersCount}</div>
+          <div className="text-2xl font-bold text-info mt-1">{analytics.activeOrdersCount || 0}</div>
         </div>
         <div className="bg-white p-4 rounded-2xl border border-border shadow-xs">
           <div className="text-[11px] font-bold uppercase text-gray-500">Low-Stock Alerts</div>
-          <div className="text-2xl font-bold text-accent mt-1">{analytics.lowStockCount}</div>
+          <div className="text-2xl font-bold text-accent mt-1">{analytics.lowStockCount || 0}</div>
         </div>
         <div className="bg-white p-4 rounded-2xl border border-border shadow-xs">
           <div className="text-[11px] font-bold uppercase text-gray-500">Pending Returns</div>
@@ -92,8 +107,9 @@ export default function ManagerPage() {
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex flex-wrap gap-2 text-xs border-b border-border pb-2">
+      <div className="flex gap-2 text-xs border-b border-border pb-2 overflow-x-auto scrollbar-none whitespace-nowrap">
         <button
+          type="button"
           onClick={() => setActiveTab('inventory')}
           className={`px-4 py-2 rounded-xl font-bold transition-all cursor-pointer ${
             activeTab === 'inventory' ? 'bg-primary text-white shadow-xs' : 'bg-white text-gray-500 hover:bg-bg border border-border'
@@ -102,6 +118,7 @@ export default function ManagerPage() {
           📦 Inventory & Stock ({products.length})
         </button>
         <button
+          type="button"
           onClick={() => setActiveTab('pickup')}
           className={`px-4 py-2 rounded-xl font-bold transition-all cursor-pointer ${
             activeTab === 'pickup' ? 'bg-primary text-white shadow-xs' : 'bg-white text-gray-500 hover:bg-bg border border-border'
@@ -110,6 +127,7 @@ export default function ManagerPage() {
           🏪 Pickup Slots ({pickupOrders.length})
         </button>
         <button
+          type="button"
           onClick={() => setActiveTab('delivery')}
           className={`px-4 py-2 rounded-xl font-bold transition-all cursor-pointer ${
             activeTab === 'delivery' ? 'bg-primary text-white shadow-xs' : 'bg-white text-gray-500 hover:bg-bg border border-border'
@@ -118,6 +136,7 @@ export default function ManagerPage() {
           🚚 Deliveries ({deliveryOrders.length})
         </button>
         <button
+          type="button"
           onClick={() => setActiveTab('returns')}
           className={`px-4 py-2 rounded-xl font-bold transition-all cursor-pointer ${
             activeTab === 'returns' ? 'bg-primary text-white shadow-xs' : 'bg-white text-gray-500 hover:bg-bg border border-border'

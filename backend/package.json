@@ -8,7 +8,9 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "seed:admin": "node src/scripts/seedAdmin.js",
+    "test": "node --experimental-vm-modules ../node_modules/jest/bin/jest.js --runInBand --forceExit"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -22,6 +24,14 @@
     "helmet": "^8.0.0",
     "jsonwebtoken": "9.0.3",
     "mongoose": "9.9.3",
-    "morgan": "^1.10.0"
+    "morgan": "^1.10.0",
+    "nodemailer": "^9.0.5",
+    "razorpay": "^2.9.8",
+    "twilio": "^6.1.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "mongodb-memory-server": "^10.1.4",
+    "supertest": "^7.0.0"
   }
 }
